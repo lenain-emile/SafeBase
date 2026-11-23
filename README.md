@@ -41,21 +41,21 @@ La base `safebase_db` n'est pas restaurable depuis l'interface : elle contient l
 Le pipeline `.github/workflows/ci.yml` tourne sur chaque PR vers `main`, sur chaque push sur `main` et sur chaque tag `v*` :
 
 1. **CI** (en parallèle) :
-   - `server` : vérification des types (`npm run typecheck`) et tests (`npm test`)
-   - `prisma` : les migrations s'appliquent sur un Postgres 15 vide et correspondent à `schema.prisma`
+   - `server` : vérification des types (`npm run typecheck`), tests (`npm test`), et migrations Prisma appliquées sur un Postgres 15 vide et synchronisées avec `schema.prisma`
    - `worker-go` : `go vet`, tests, `govulncheck` (failles connues)
    - `integration` : vraie sauvegarde (`pg_dump` 15) puis vraie restauration (`psql`) sur Postgres 15
    - `client` : build du client React
-2. **CD** (si tout passe) : construction des 3 images de production (étape `prod` des Dockerfiles). Sur une PR, elles sont seulement construites. Sinon, elles sont publiées sur GitHub Container Registry :
+2. **CD** (seulement si toutes les vérifications passent) : construction des 3 images Docker, publiées sur GitHub Container Registry :
    - `ghcr.io/lenain-emile/safebase-server`
    - `ghcr.io/lenain-emile/safebase-worker-go`
    - `ghcr.io/lenain-emile/safebase-client`
 
-   | Événement | Tags publiés |
-   |---|---|
-   | push sur `main` | `latest`, `sha-<commit>` |
-   | tag `v1.2.3` | `1.2.3`, `1.2`, `sha-<commit>` |
-3. **Déploiement** (tag `v*` uniquement, si la variable `DEPLOY_HOST` est définie) : copie `docker-compose.prod.yml` sur le serveur par SSH puis lance `docker compose pull && up -d` avec la version du tag.
+   | Événement | Image construite | Tags publiés |
+   |---|---|---|
+   | PR vers `main` | production (vérification) | aucun, rien n'est publié |
+   | push sur `main` | **développement** (étape `dev`) | `dev`, `dev-<commit>` |
+   | tag `v1.2.3` | **production** (étape `prod`) | `1.2.3`, `latest` |
+3. **Notification Google Chat** (à chaque exécution) : statut, commit, auteur, lien vers le run et, en cas d'échec, les jobs et étapes en échec avec les lignes d'erreur des logs. Nécessite le secret `GOOGLE_CHAT_WEBHOOK` (voir ci-dessous).
 
 Lancer le test d'intégration en local (Postgres 15 et client 15 requis) :
 
@@ -72,18 +72,19 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-### Mettre en place le déploiement (une seule fois)
+### Lancer les images de production
 
-Sur le serveur : installer Docker, créer `~/safebase/.env` (mêmes variables que `.env.example`, avec de vrais secrets, `chmod 600`), et si les images sont privées, `docker login ghcr.io`.
+Avec les variables de `.env` remplies (et `docker login ghcr.io` tant que les images sont privées) :
 
-Dans GitHub (Settings > Secrets and variables > Actions) :
+```bash
+TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d
+```
 
-| Type | Nom | Valeur |
-|---|---|---|
-| Variable | `DEPLOY_HOST` | adresse du serveur |
-| Variable | `DEPLOY_USER` | utilisateur SSH |
-| Variable | `VITE_API_URL` | URL publique de l'API (ex. `https://api.exemple.fr`) |
-| Secret | `DEPLOY_SSH_KEY` | clé privée SSH dédiée au déploiement |
-| Secret | `DEPLOY_KNOWN_HOSTS` | sortie de `ssh-keyscan <serveur>` |
+Pour revenir à une version précédente, relancer avec son numéro (`TAG=0.9.0`). Les migrations Prisma, elles, ne reviennent pas en arrière.
 
-Retour arrière : sur le serveur, `cd ~/safebase && TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d` avec la version précédente. Attention : les migrations Prisma ne reviennent pas en arrière, seules les images changent.
+### Mettre en place les notifications Google Chat (une seule fois)
+
+1. Dans Google Chat, ouvrir l'espace qui doit recevoir les notifications → **Applications et intégrations** → **Webhooks** → **Ajouter un webhook**, puis copier l'URL.
+2. L'enregistrer comme secret du dépôt : `gh secret set GOOGLE_CHAT_WEBHOOK` (puis coller l'URL).
+
+Sans ce secret, le job `notify` affiche un avertissement et la CI continue.

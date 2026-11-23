@@ -1,4 +1,5 @@
-# Dependabot ouvre chaque semaine des PR de mise à jour.
+# Dependabot ouvre chaque semaine des PR de mise à jour, testées par la CI comme les autres.
+# Les versions majeures sont ignorées : elles peuvent casser le projet et se font à la main.
 # cooldown : attend 7 jours après la sortie d'une version npm avant de la proposer,
 # le temps qu'un éventuel paquet malveillant soit détecté et retiré.
 version: 2
@@ -14,6 +15,9 @@ updates:
     schedule: { interval: weekly }
     cooldown: { default-days: 7 }
     groups: { npm-minor-patch: { update-types: [ minor, patch ] } }
+    ignore:
+      - dependency-name: "*"
+        update-types: [ "version-update:semver-major" ]
 
   - package-ecosystem: gomod
     directory: /worker-go
@@ -23,6 +27,8 @@ updates:
     directories: [ /server, /worker-go, /client ]
     schedule: { interval: weekly }
     ignore:
+      - dependency-name: "*"
+        update-types: [ "version-update:semver-major" ]
       # Alpine 3.23+ ne fournit plus postgresql15-client, indispensable au worker (voir worker-go/Dockerfile)
       - dependency-name: alpine
         versions: [ ">=3.23" ]

@@ -180,10 +180,12 @@ jobs:
       # Détecte les erreurs de syntaxe et les imports cassés
       - run: npm run build
 
-  # CD : construit les 3 images de production une fois toutes les vérifications passées.
-  # - PR : construction seule (vérifie que les Dockerfiles fonctionnent)
-  # - push sur main : publication avec les tags "latest" et "sha-xxxxxxx"
-  # - tag v1.2.3 : publication avec les tags "1.2.3" et "1.2"
+  # CD : construit les 3 images une fois toutes les vérifications passées.
+  # Si un seul test échoue, ce job ne démarre pas : rien n'est construit ni publié.
+  # | Déclencheur   | Étape du Dockerfile | Tags publiés                    |
+  # | PR            | prod                | aucun (construction seule)      |
+  # | push sur main | dev                 | dev, dev-<sha>                  |
+  # | tag v1.2.3    | prod                | 1.2.3, 1.2, latest              |
   docker-images:
     name: docker-images (${{ matrix.service }})
     needs: [ server, prisma, worker-go, integration, client ]
@@ -212,16 +214,22 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}-${{ matrix.service }}
+          # "latest" n'est jamais ajouté automatiquement : il désigne uniquement la dernière version de prod
+          flavor: latest=false
           tags: |
+            type=raw,value=dev,enable={{is_default_branch}}
+            type=sha,prefix=dev-,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=ref,event=pr
 
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./${{ matrix.service }}
+          # Branche main → image de développement ; tag (et PR, pour vérifier le Dockerfile de prod) → production
+          target: ${{ github.ref == 'refs/heads/main' && 'dev' || 'prod' }}
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -263,3 +271,78 @@ jobs:
           TAG="${VERSION#v}"
           scp docker-compose.prod.yml "$TARGET:safebase/docker-compose.prod.yml"
           ssh "$TARGET" "cd safebase && export TAG=$TAG && docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d"
+
+  # Notification Google Chat à chaque exécution, succès comme échec (if: always()).
+  # Contient le commit, son auteur, le statut et, en cas d'échec, les jobs/étapes en échec avec un extrait des logs.
+  # Le webhook est le secret GOOGLE_CHAT_WEBHOOK (Settings > Secrets and variables > Actions).
+  notify:
+    name: notify
+    needs: [ server, prisma, worker-go, integration, client, docker-images, deploy ]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # lire les jobs et les logs de ce run pour expliquer l'échec
+    steps:
+      - name: Envoyer la notification Google Chat
+        env:
+          WEBHOOK: ${{ secrets.GOOGLE_CHAT_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || 'success' }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || github.event.pull_request.title }}
+          AUTHOR: ${{ github.actor }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Les PR de Dependabot n'ont pas accès aux secrets : on prévient sans faire échouer le run
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::Secret GOOGLE_CHAT_WEBHOOK absent : notification non envoyée"
+            exit 0
+          fi
+
+          case "$STATUS" in
+            success)   status="✅ Succès" ;;
+            failure)   status="❌ Échec" ;;
+            *)         status="⚠️ Annulé" ;;
+          esac
+
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            trigger="PR #$PR_NUMBER"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            trigger="tag $GITHUB_REF_NAME (production)"
+          else
+            trigger="push sur $GITHUB_REF_NAME (développement)"
+          fi
+
+          repo_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          text="*SafeBase CI/CD : $status*
+          *Déclencheur :* $trigger
+          *Commit :* <$repo_url/commit/$SHA|${SHA:0:7}> par $AUTHOR
+          *Message :* $(echo "$COMMIT_MESSAGE" | head -n 1)
+          *Détails :* <$repo_url/actions/runs/$GITHUB_RUN_ID|ouvrir le run>"
+
+          # En cas d'échec : pour chaque job en échec, l'étape fautive et les lignes d'erreur de ses logs.
+          # "|| true" : GitHub lance ce script avec "bash -e -o pipefail" ; sans lui, un grep sans résultat
+          # arrêterait le script et la notification ne partirait pas.
+          if [ "$STATUS" = "failure" ]; then
+            text="$text
+
+          *Raison de l'échec :*"
+            failed_jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" --paginate \
+              --jq '.jobs[] | select(.conclusion == "failure") | "\(.id)\t\(.name)\t\([.steps[] | select(.conclusion == "failure") | .name] | join(", "))"' || true)
+            while IFS=$'\t' read -r job_id job_name step_name; do
+              [ -z "$job_id" ] && continue
+              # Retire les codes couleur et l'horodatage de chaque ligne, garde les lignes d'erreur (sinon la fin du log)
+              logs=$(gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$job_id/logs" \
+                | perl -pe 's/\e\[[0-9;]*[A-Za-z]//g; s/^[0-9T:.-]+Z //' || true)
+              errors=$(echo "$logs" | grep -iE '##\[error\]|error|fail|panic' | grep -v '^##\[group\]' | tail -n 12 || true)
+              [ -z "$errors" ] && errors=$(echo "$logs" | tail -n 12)
+              text="$text
+          • *$job_name* — étape « $step_name »
+          \`\`\`$(echo "$errors" | cut -c1-200)\`\`\`"
+            done <<< "$failed_jobs"
+          fi
+
+          # jq construit un JSON valide quel que soit le texte (guillemets, retours à la ligne...)
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -fsS -X POST -H 'Content-Type: application/json; charset=UTF-8' -d @- "$WEBHOOK" > /dev/null
+          echo "Notification envoyée ($STATUS)"

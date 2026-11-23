@@ -5,14 +5,19 @@ COPY . .
 # CGO_ENABLED=0 : binaire statique, qui tourne sur n'importe quel Alpine
 RUN CGO_ENABLED=0 go build -o /worker .
 
-# Étape 2 : image finale, utilisée en dev comme en prod pour que pg_dump soit toujours en version 15.
+# Étape 2 : image d'exécution, identique en dev et en prod pour que pg_dump soit toujours en version 15.
 # Le client Postgres doit avoir la même version majeure que les bases (postgres:15) :
 # un dump fait par pg_dump 17 contient des commandes que Postgres 15 refuse à la restauration.
 # Alpine 3.22 est la dernière version qui fournit postgresql15-client (support jusqu'au 1er mai 2027).
-FROM alpine:3.22
+FROM alpine:3.22 AS runtime
 RUN apk add --no-cache postgresql15-client mysql-client gzip
 WORKDIR /app
 COPY --from=build /worker /usr/local/bin/worker
 ENV STORAGE_PATH=/app/backups
 EXPOSE 8080
 CMD ["worker"]
+
+# Mêmes noms d'étapes que les autres services : la CI choisit "dev" (branche main) ou "prod" (tag)
+FROM runtime AS dev
+
+FROM runtime AS prod

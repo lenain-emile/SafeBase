@@ -46,16 +46,18 @@ Le pipeline `.github/workflows/ci.yml` tourne sur chaque PR vers `main`, sur cha
    - `worker-go` : `go vet`, tests, `govulncheck` (failles connues)
    - `integration` : vraie sauvegarde (`pg_dump` 15) puis vraie restauration (`psql`) sur Postgres 15
    - `client` : build du client React
-2. **CD** (si tout passe) : construction des 3 images de production (étape `prod` des Dockerfiles). Sur une PR, elles sont seulement construites. Sinon, elles sont publiées sur GitHub Container Registry :
+2. **CD** (seulement si toutes les vérifications passent) : construction des 3 images Docker, publiées sur GitHub Container Registry :
    - `ghcr.io/lenain-emile/safebase-server`
    - `ghcr.io/lenain-emile/safebase-worker-go`
    - `ghcr.io/lenain-emile/safebase-client`
 
-   | Événement | Tags publiés |
-   |---|---|
-   | push sur `main` | `latest`, `sha-<commit>` |
-   | tag `v1.2.3` | `1.2.3`, `1.2`, `sha-<commit>` |
+   | Événement | Image construite | Tags publiés |
+   |---|---|---|
+   | PR vers `main` | production (vérification) | aucun, rien n'est publié |
+   | push sur `main` | **développement** (étape `dev`) | `dev`, `dev-<commit>` |
+   | tag `v1.2.3` | **production** (étape `prod`) | `1.2.3`, `1.2`, `latest` |
 3. **Déploiement** (tag `v*` uniquement, si la variable `DEPLOY_HOST` est définie) : copie `docker-compose.prod.yml` sur le serveur par SSH puis lance `docker compose pull && up -d` avec la version du tag.
+4. **Notification Google Chat** (à chaque exécution) : statut, commit, auteur, lien vers le run et, en cas d'échec, les jobs et étapes en échec avec les lignes d'erreur des logs. Nécessite le secret `GOOGLE_CHAT_WEBHOOK` (voir ci-dessous).
 
 Lancer le test d'intégration en local (Postgres 15 et client 15 requis) :
 
@@ -85,5 +87,12 @@ Dans GitHub (Settings > Secrets and variables > Actions) :
 | Variable | `VITE_API_URL` | URL publique de l'API (ex. `https://api.exemple.fr`) |
 | Secret | `DEPLOY_SSH_KEY` | clé privée SSH dédiée au déploiement |
 | Secret | `DEPLOY_KNOWN_HOSTS` | sortie de `ssh-keyscan <serveur>` |
+
+### Mettre en place les notifications Google Chat (une seule fois)
+
+1. Dans Google Chat, ouvrir l'espace qui doit recevoir les notifications → **Applications et intégrations** → **Webhooks** → **Ajouter un webhook**, puis copier l'URL.
+2. L'enregistrer comme secret du dépôt : `gh secret set GOOGLE_CHAT_WEBHOOK` (puis coller l'URL).
+
+Sans ce secret, le job `notify` affiche un avertissement et la CI continue.
 
 Retour arrière : sur le serveur, `cd ~/safebase && TAG=1.0.0 docker compose -f docker-compose.prod.yml up -d` avec la version précédente. Attention : les migrations Prisma ne reviennent pas en arrière, seules les images changent.

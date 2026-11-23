@@ -43,7 +43,7 @@ services:
       retries: 5
 
   server-node:
-    image: ${IMAGE_PREFIX:-ghcr.io/alexisnguemby/safebase}-server:${TAG:?TAG manquant (ex. TAG=1.0.0)}
+    image: ${IMAGE_PREFIX:-ghcr.io/lenain-emile/safebase}-server:${TAG:?TAG manquant (ex. TAG=1.0.0)}
     restart: always
     environment:
       PORT: 3000
@@ -67,7 +67,7 @@ services:
 
   # Pas de "ports" : seul le serveur Node appelle le worker
   worker-go:
-    image: ${IMAGE_PREFIX:-ghcr.io/alexisnguemby/safebase}-worker-go:${TAG:?TAG manquant (ex. TAG=1.0.0)}
+    image: ${IMAGE_PREFIX:-ghcr.io/lenain-emile/safebase}-worker-go:${TAG:?TAG manquant (ex. TAG=1.0.0)}
     restart: always
     environment:
       PORT: 8080
@@ -81,7 +81,7 @@ services:
         condition: service_healthy
 
   client-web:
-    image: ${IMAGE_PREFIX:-ghcr.io/alexisnguemby/safebase}-client:${TAG:?TAG manquant (ex. TAG=1.0.0)}
+    image: ${IMAGE_PREFIX:-ghcr.io/lenain-emile/safebase}-client:${TAG:?TAG manquant (ex. TAG=1.0.0)}
     restart: always
     ports:
       - "80:80"

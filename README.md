@@ -1,5 +1,5 @@
 # 1. Récupérer le projet
-git clone https://github.com/AlexisNguemby/SafeBase.git
+git clone https://github.com/lenain-emile/SafeBase.git
 cd SafeBase
 
 # 2. Créer le fichier d'environnement local
@@ -47,9 +47,9 @@ Le pipeline `.github/workflows/ci.yml` tourne sur chaque PR vers `main`, sur cha
    - `integration` : vraie sauvegarde (`pg_dump` 15) puis vraie restauration (`psql`) sur Postgres 15
    - `client` : build du client React
 2. **CD** (si tout passe) : construction des 3 images de production (étape `prod` des Dockerfiles). Sur une PR, elles sont seulement construites. Sinon, elles sont publiées sur GitHub Container Registry :
-   - `ghcr.io/alexisnguemby/safebase-server`
-   - `ghcr.io/alexisnguemby/safebase-worker-go`
-   - `ghcr.io/alexisnguemby/safebase-client`
+   - `ghcr.io/lenain-emile/safebase-server`
+   - `ghcr.io/lenain-emile/safebase-worker-go`
+   - `ghcr.io/lenain-emile/safebase-client`
 
    | Événement | Tags publiés |
    |---|---|

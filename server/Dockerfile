@@ -2,7 +2,7 @@
 # - dev  : utilisée par docker-compose.yml (code monté en volume, rechargement à chaud)
 # - prod : la dernière étape, donc celle construite par défaut (CI et images publiées)
 
-FROM node:24-alpine AS base
+FROM node:26-alpine AS base
 # Prisma a besoin d'OpenSSL sur Alpine
 RUN apk add --no-cache openssl
 WORKDIR /app

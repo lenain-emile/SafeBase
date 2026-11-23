@@ -3,7 +3,7 @@
 # - build : compile le site en fichiers statiques (dist/)
 # - prod  : la dernière, construite par défaut : nginx sert les fichiers statiques
 
-FROM node:24-alpine AS dev
+FROM node:26-alpine AS dev
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci

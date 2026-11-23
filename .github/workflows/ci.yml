@@ -28,31 +28,7 @@ jobs:
     defaults:
       run:
         working-directory: server
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: server/package-lock.json
-
-      - run: npm ci
-
-      # tsx et vitest ignorent les types : sans cette étape, une erreur de type passe la CI
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Tests
-        run: npm test
-
-  # Les migrations Prisma s'appliquent-elles sur une base vide, et correspondent-elles au schéma ?
-  prisma:
-    name: prisma
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: server
+    # Base vide pour vérifier les migrations Prisma
     services:
       postgres:
         image: postgres:15-alpine
@@ -77,7 +53,13 @@ jobs:
 
       - run: npm ci
 
-      - run: npx prisma validate
+      # tsx et vitest ignorent les types : sans cette étape, une erreur de type passe la CI.
+      # Lance aussi "prisma generate", qui refuse un schema.prisma invalide.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
 
       - name: Appliquer les migrations sur une base vide
         run: npx prisma migrate deploy
@@ -185,10 +167,10 @@ jobs:
   # | Déclencheur   | Étape du Dockerfile | Tags publiés                    |
   # | PR            | prod                | aucun (construction seule)      |
   # | push sur main | dev                 | dev, dev-<sha>                  |
-  # | tag v1.2.3    | prod                | 1.2.3, 1.2, latest              |
+  # | tag v1.2.3    | prod                | 1.2.3, latest                   |
   docker-images:
     name: docker-images (${{ matrix.service }})
-    needs: [ server, prisma, worker-go, integration, client ]
+    needs: [ server, worker-go, integration, client ]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -220,9 +202,7 @@ jobs:
             type=raw,value=dev,enable={{is_default_branch}}
             type=sha,prefix=dev-,enable={{is_default_branch}}
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=ref,event=pr
 
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -239,45 +219,12 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-  # Déploiement sur un serveur par SSH, uniquement pour un tag v*.
-  # Ne s'exécute que si la variable DEPLOY_HOST est définie (Settings > Secrets and variables > Actions).
-  deploy:
-    name: deploy
-    needs: docker-images
-    if: startsWith(github.ref, 'refs/tags/v') && vars.DEPLOY_HOST != ''
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # known_hosts stocké en secret : on vérifie l'identité du serveur au lieu de lui faire confiance aveuglément
-      - name: Configurer SSH
-        env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY" > ~/.ssh/id_ed25519
-          echo "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/id_ed25519
-
-      # Le serveur télécharge les images testées par la CI, il ne construit rien.
-      # Les secrets de l'application sont dans ~/safebase/.env sur le serveur, pas dans GitHub.
-      - name: Déployer
-        env:
-          TARGET: ${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          TAG="${VERSION#v}"
-          scp docker-compose.prod.yml "$TARGET:safebase/docker-compose.prod.yml"
-          ssh "$TARGET" "cd safebase && export TAG=$TAG && docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d"
-
   # Notification Google Chat à chaque exécution, succès comme échec (if: always()).
   # Contient le commit, son auteur, le statut et, en cas d'échec, les jobs/étapes en échec avec un extrait des logs.
   # Le webhook est le secret GOOGLE_CHAT_WEBHOOK (Settings > Secrets and variables > Actions).
   notify:
     name: notify
-    needs: [ server, prisma, worker-go, integration, client, docker-images, deploy ]
+    needs: [ server, worker-go, integration, client, docker-images ]
     if: always()
     runs-on: ubuntu-latest
     permissions:
